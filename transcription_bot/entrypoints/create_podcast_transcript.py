@@ -11,8 +11,9 @@ from loguru import logger
 from transcription_bot.handlers.episode_data_handler import create_episode_data
 from transcription_bot.handlers.episode_raw_data_handler import gather_raw_data
 from transcription_bot.handlers.episode_segment_handler import extract_episode_segments_from_episode_raw_data
+from transcription_bot.handlers.review_gate import review_and_maybe_publish
 from transcription_bot.handlers.transcription_handler import get_transcript
-from transcription_bot.interfaces.wiki import EPISODE_PAGE_PREFIX, episode_has_wiki_page, save_wiki_page
+from transcription_bot.interfaces.wiki import episode_has_wiki_page
 from transcription_bot.parsers.rss_feed import get_podcast_rss_entries
 from transcription_bot.serializers.wiki import create_podcast_wiki_page
 from transcription_bot.utils.config import UNPROCESSABLE_EPISODES, config
@@ -23,10 +24,12 @@ setup_tracing(config)
 
 
 @cronitor.job(config.cronitor_job_id)
-def main(*, selected_episode: int) -> None:
+def main(*, selected_episode: int, publish: bool = False, assume_yes: bool = False) -> None:
     """Create/update a transcript for an episode of the podcast.
 
-    By default, this will transcribe the latest episode (if no wiki page exists for it).
+    By default, this will transcribe the latest episode (if no wiki page exists for it)
+    and stop at a DRY RUN — writing the draft + diff locally without publishing. Pass
+    ``publish=True`` to go through the review gate and (on approval) push to the wiki.
     """
     config.validators.validate_all()
 
@@ -71,11 +74,12 @@ def main(*, selected_episode: int) -> None:
     logger.info("Converting episode data to wiki markdown...")
     wiki_page = create_podcast_wiki_page(episode_data)
 
-    logger.info("Creating (or updating) wiki page...")
-    save_wiki_page(
-        f"{EPISODE_PAGE_PREFIX}{episode_raw_data.rss_entry.episode_number}",
-        wiki_page,
-        allow_page_editing=allow_page_editing,
+    logger.info("Reviewing draft (and publishing only if approved)...")
+    review_and_maybe_publish(
+        episode_number=episode_raw_data.rss_entry.episode_number,
+        page_text=wiki_page,
+        publish=publish,
+        assume_yes=assume_yes,
     )
 
     logger.success(f"Episode #{podcast_rss_entry.episode_number} processed.")
@@ -83,14 +87,20 @@ def main(*, selected_episode: int) -> None:
 
 
 if __name__ == "__main__":
-    _, *_episodes_to_process = sys.argv
+    _args = sys.argv[1:]
 
-    _episode_to_process = 0
+    # Flags: --publish (go through the gate), --yes/-y (pre-grant approval).
+    _publish = "--publish" in _args
+    _assume_yes = "--yes" in _args or "-y" in _args
 
-    if _episodes_to_process:
-        if len(_episodes_to_process) > 1:
-            raise ValueError("Only one episode number is allowed.")
-        else:
-            _episode_to_process = int(_episodes_to_process[0])
+    _positional = [a for a in _args if not a.startswith("-")]
+    if len(_positional) > 1:
+        raise ValueError("Only one episode number is allowed.")
+    _episode_to_process = int(_positional[0]) if _positional else 0
 
-    run_main_safely(main, selected_episode=_episode_to_process)
+    run_main_safely(
+        main,
+        selected_episode=_episode_to_process,
+        publish=_publish,
+        assume_yes=_assume_yes,
+    )

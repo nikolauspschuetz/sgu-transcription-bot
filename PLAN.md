@@ -80,12 +80,13 @@ Match those two shapes and **every downstream stage works unchanged.**
 ## Roadmap
 
 - [x] Recon upstream, confirm the seam, fork to `local-backend` branch
-- [ ] Pin Python 3.12, add `local` optional-dep group (faster-whisper, pyannote.audio, torch), install ffmpeg
-- [ ] Implement `interfaces/local_whisper.py` → `get_transcription` (contract-compatible)
-- [ ] Implement `interfaces/local_diarization.py` → `create_diarization` (contract-compatible)
-- [ ] Add `TB_TRANSCRIPTION_BACKEND=local|azure` switch; make cloud creds required only for `azure`
-- [ ] Build local voiceprint/embedding reference set + cosine speaker-ID
-- [ ] Add Markdown + WebVTT serializers alongside the wiki serializer
-- [ ] Add review gate: emit a draft + diff, require approval before any publish
-- [ ] End-to-end dry run on **episode 1096** (the AI episode), review output
+- [x] Pin Python 3.12, add `local`/`local-mlx` dep groups; add `.env.template` profiles (ffmpeg install pending on box)
+- [x] Implement `interfaces/local_whisper.py` (+ `local_mlx_whisper.py` for Apple GPU) → `get_transcription`
+- [x] Implement `interfaces/local_diarization.py` → `create_diarization` (contract-compatible)
+- [x] Add backend switches; make cloud creds required only for the paid backend selected
+- [ ] Build local voiceprint/embedding reference set + cosine speaker-ID (#5)
+- [x] Add Markdown + WebVTT serializers alongside the wiki serializer (#7)
+- [x] Add review gate: emit a draft + diff, require approval before any publish (#8)
+- [ ] Free/optional LLM helper (ollama | none), retire paid OpenAI default (#6)
+- [ ] End-to-end dry run on **episode 1096** (the AI episode), review output (#9)
 - [ ] (Later) wire gated MediaWiki publish; talk to wiki maintainers/producers
