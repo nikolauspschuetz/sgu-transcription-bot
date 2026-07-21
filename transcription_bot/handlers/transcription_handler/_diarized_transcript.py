@@ -12,6 +12,8 @@ def _get_transcription(rss_entry: PodcastRssEntry) -> RawTranscript | None:
     backend = config.transcription_backend
     if backend == "local_whisper":
         from transcription_bot.interfaces.local_whisper import get_transcription  # noqa: PLC0415
+    elif backend == "local_mlx_whisper":
+        from transcription_bot.interfaces.local_mlx_whisper import get_transcription  # noqa: PLC0415
     elif backend == "azure":
         from transcription_bot.interfaces.azure import get_transcription  # noqa: PLC0415
     else:

@@ -77,6 +77,9 @@ class ConfigProto(Protocol):
     whisper_compute_type: str
     whisper_beam_size: int
 
+    # Local MLX Whisper (Apple Silicon GPU)
+    mlx_whisper_repo: str
+
     # Local diarization (pyannote.audio)
     hf_token: str
     diarization_pipeline: str

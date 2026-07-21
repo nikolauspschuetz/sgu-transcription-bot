@@ -5,22 +5,33 @@ local_mode = false
 
 # ---------------------------------------------------------------------------
 # Backend selection (which engine performs each stage)
-#   transcription_backend: "local_whisper" (free) | "azure" (paid, legacy)
+#   transcription_backend: "local_whisper"     free, faster-whisper, CPU (any machine)
+#                          "local_mlx_whisper" free, MLX, uses the Apple-Silicon GPU
+#                          "azure"             paid, legacy — do not use
 #   diarization_backend:   "local_pyannote" (free) | "pyannote_ai" (paid, legacy)
 #   llm_backend:           "none" (heuristics only) | "ollama" (free, local) | "openai" (paid, legacy)
 # The set of required credentials is derived from these choices (see config.py).
+#
+# NOTE on Apple Silicon (e.g. the M4 mini): faster-whisper/CTranslate2 has no Metal
+# backend, so "local_whisper" is CPU-only there. Use "local_mlx_whisper" to run the GPU.
+# pyannote uses PyTorch, which DOES support Apple Silicon via diarization_device="mps".
 # ---------------------------------------------------------------------------
 transcription_backend = "local_whisper"
 diarization_backend = "local_pyannote"
 llm_backend = "none"
 
-# --- local Whisper (faster-whisper) sizing ---------------------------------
-#   dev (Intel CPU):  model="medium.en" device="cpu"  compute_type="int8"
-#   gpu box:          model="large-v3"  device="cuda" compute_type="float16"
+# --- faster-whisper sizing (transcription_backend = "local_whisper") -------
+#   dev (Intel CPU):     model="medium.en" device="cpu" compute_type="int8"
+#   Apple Silicon (CPU): model="large-v3"  device="cpu" compute_type="int8"
 whisper_model = "medium.en"
 whisper_device = "cpu"
 whisper_compute_type = "int8"
 whisper_beam_size = 5
+
+# --- MLX Whisper repo (transcription_backend = "local_mlx_whisper") --------
+# HuggingFace repo of an MLX-converted Whisper model; runs on the Apple GPU.
+#   e.g. mlx-community/whisper-large-v3-mlx  |  mlx-community/whisper-medium.en-mlx
+mlx_whisper_repo = "mlx-community/whisper-large-v3-mlx"
 
 # --- local diarization (pyannote.audio) ------------------------------------
 hf_token = ""                       # HuggingFace token to download gated pyannote models (free)

@@ -59,8 +59,10 @@ Match those two shapes and **every downstream stage works unchanged.**
 
 1. **Fork & modernize** the archived MIT repo (keep proven RSS/segment/wiki plumbing).
 2. **Local Whisper + pyannote** for ASR/diarization (free, no per-minute cost, no
-   webhook/ngrok dance). Needs a GPU for large-v3 at reasonable speed; HF token for
-   pyannote model download.
+   webhook/ngrok dance). HF token needed for pyannote model download. Target run box is
+   an **Apple Silicon M4 mini (24 GB)** — so ASR-on-GPU uses **MLX Whisper**
+   (`local_mlx_whisper`), since faster-whisper/CTranslate2 is CPU-only on Apple Silicon;
+   pyannote uses PyTorch `mps`. Dev on the Intel Mac uses faster-whisper CPU.
 3. **Our own output first** (Markdown/VTT + a review diff). Wiki auto-publish is a
    later, opt-in, human-gated step pending community/producer buy-in.
 
@@ -68,8 +70,9 @@ Match those two shapes and **every downstream stage works unchanged.**
 
 - **Python 3.14** on this machine; torch/pyannote lag → pin project to **3.12** via uv.
 - **ffmpeg** not installed → `brew install ffmpeg` (Whisper needs it).
-- **GPU**: mac = Metal/MPS (faster-whisper via CTranslate2 is CPU/CUDA; on Apple Silicon
-  consider `whisper.cpp` or MLX-whisper). Decide ASR runtime per hardware.
+- **ASR runtime is hardware-specific** (resolved): Intel dev Mac → faster-whisper CPU;
+  M4 mini → MLX Whisper on the Metal GPU. Diarization → pyannote on `mps` (with
+  `PYTORCH_ENABLE_MPS_FALLBACK=1`) or CPU fallback.
 - **Speaker-ID cold start**: need labeled reference audio per rogue to build embeddings.
   Bootstrap from a couple of older episodes that already have verified transcripts.
 - **Segmentation** still calls an LLM; keep OpenAI seam, evaluate Claude swap.

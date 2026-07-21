@@ -31,16 +31,29 @@ uv sync                 # base deps
 uv sync --group local   # + faster-whisper, pyannote.audio, torch, torchaudio, soundfile
 ```
 
-### CUDA note
+### The target box is an Apple Silicon M4 mini
 
-`uv sync --group local` pulls a default torch wheel. On a CUDA box, install the
-matching build first so GPU is used, e.g.:
+Two Apple-specific facts drive the config:
 
-```bash
-uv pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
-```
+- **ASR:** faster-whisper (CTranslate2) has **no Metal backend**, so `local_whisper` is
+  CPU-only on Apple Silicon. To use the 10-core GPU, use the **MLX** backend:
+  ```bash
+  uv sync --group local --group local-mlx   # adds mlx-whisper (Apple Silicon only)
+  ```
+  then set `TB_TRANSCRIPTION_BACKEND=local_mlx_whisper` (Profile B).
+- **Diarization:** pyannote runs on PyTorch, which supports Apple Silicon via the `mps`
+  device. Set `TB_DIARIZATION_DEVICE=mps`. A few pyannote ops aren't MPS-implemented, so
+  export the fallback so they drop to CPU instead of erroring:
+  ```bash
+  export PYTORCH_ENABLE_MPS_FALLBACK=1
+  ```
+  If MPS gives trouble, `TB_DIARIZATION_DEVICE=cpu` is a reliable fallback (diarization
+  is far lighter than ASR).
 
-Verify: `uv run python -c "import torch; print(torch.cuda.is_available())"` → `True`.
+Verify torch sees the GPU: `uv run python -c "import torch; print(torch.backends.mps.is_available())"` → `True`.
+
+> Note: `uv sync --group local` (no `local-mlx`) also works on Intel Macs / Linux for
+> CPU transcription — the MLX group is what's Apple-only.
 
 ## Configure
 
@@ -50,8 +63,9 @@ cp .env.template .env
 
 Then edit `.env`:
 - Set `TB_HF_TOKEN=...`
-- **Dev Mac (CPU):** keep Profile A (`medium.en` / `cpu` / `int8`).
-- **GPU box:** uncomment Profile B (`large-v3` / `cuda` / `float16`, optional Ollama).
+- **Dev Mac (Intel, CPU):** keep Profile A (`medium.en` / `cpu` / `int8`).
+- **M4 mini:** uncomment Profile B (`local_mlx_whisper` on the GPU + `mps` diarization,
+  optional Ollama).
 
 Credentials for paid services stay blank — they're only validated if you switch a
 backend back to a paid option, which we don't.
