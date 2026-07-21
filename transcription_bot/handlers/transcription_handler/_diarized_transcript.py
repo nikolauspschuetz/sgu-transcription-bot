@@ -2,18 +2,41 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from transcription_bot.interfaces.azure import get_transcription
-from transcription_bot.interfaces.pyannote import create_diarization
 from transcription_bot.models.data_models import PodcastRssEntry
 from transcription_bot.models.simple_models import DiarizedTranscript, DiarizedTranscriptChunk, RawTranscript
+from transcription_bot.utils.config import config
+
+
+def _get_transcription(rss_entry: PodcastRssEntry) -> RawTranscript | None:
+    """Dispatch to the configured ASR backend. Heavy deps import lazily, per backend."""
+    backend = config.transcription_backend
+    if backend == "local_whisper":
+        from transcription_bot.interfaces.local_whisper import get_transcription  # noqa: PLC0415
+    elif backend == "azure":
+        from transcription_bot.interfaces.azure import get_transcription  # noqa: PLC0415
+    else:
+        raise ValueError(f"Unknown transcription_backend: {backend!r}")
+    return get_transcription(rss_entry)
+
+
+def _create_diarization(rss_entry: PodcastRssEntry) -> "pd.DataFrame | None":
+    """Dispatch to the configured diarization backend. Heavy deps import lazily, per backend."""
+    backend = config.diarization_backend
+    if backend == "local_pyannote":
+        from transcription_bot.interfaces.local_diarization import create_diarization  # noqa: PLC0415
+    elif backend == "pyannote_ai":
+        from transcription_bot.interfaces.pyannote import create_diarization  # noqa: PLC0415
+    else:
+        raise ValueError(f"Unknown diarization_backend: {backend!r}")
+    return create_diarization(rss_entry)
 
 
 def get_diarized_transcript(rss_entry: PodcastRssEntry) -> DiarizedTranscript | None:
     """Create a transcript with the audio and podcast information."""
     logger.info("Getting diarized transcript...")
 
-    transcription = get_transcription(rss_entry)
-    diarization = create_diarization(rss_entry)
+    transcription = _get_transcription(rss_entry)
+    diarization = _create_diarization(rss_entry)
 
     if transcription is None:
         return None
