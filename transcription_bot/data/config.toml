@@ -1,7 +1,38 @@
 # override these settings with env vars, not by editing this file
-# see .env.sample
+# see .env.template
 
 local_mode = false
+
+# ---------------------------------------------------------------------------
+# Backend selection (which engine performs each stage)
+#   transcription_backend: "local_whisper" (free) | "azure" (paid, legacy)
+#   diarization_backend:   "local_pyannote" (free) | "pyannote_ai" (paid, legacy)
+#   llm_backend:           "none" (heuristics only) | "ollama" (free, local) | "openai" (paid, legacy)
+# The set of required credentials is derived from these choices (see config.py).
+# ---------------------------------------------------------------------------
+transcription_backend = "local_whisper"
+diarization_backend = "local_pyannote"
+llm_backend = "none"
+
+# --- local Whisper (faster-whisper) sizing ---------------------------------
+#   dev (Intel CPU):  model="medium.en" device="cpu"  compute_type="int8"
+#   gpu box:          model="large-v3"  device="cuda" compute_type="float16"
+whisper_model = "medium.en"
+whisper_device = "cpu"
+whisper_compute_type = "int8"
+whisper_beam_size = 5
+
+# --- local diarization (pyannote.audio) ------------------------------------
+hf_token = ""                       # HuggingFace token to download gated pyannote models (free)
+diarization_pipeline = "pyannote/speaker-diarization-3.1"
+diarization_device = "cpu"          # "cpu" | "cuda"
+# Directory of reference speaker embeddings for local speaker identification.
+# Empty = skip naming; speakers stay as SPEAKER_00.. for human review.
+voiceprint_dir = ""
+
+# --- local LLM (ollama) for segment/caption/SoF help -----------------------
+ollama_base_url = "http://localhost:11434"
+ollama_model = "llama3.1"
 
 # RSS feeds
 podcast_rss_url = "https://feed.theskepticsguide.org/feed/rss.aspx?feed=sgu"

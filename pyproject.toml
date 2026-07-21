@@ -3,7 +3,7 @@ name = "transcription-bot"
 version = "0.0.1"
 description = ""
 readme = "README.md"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "beautifulsoup4<4.13",
     "cronitor>=4.7.1",

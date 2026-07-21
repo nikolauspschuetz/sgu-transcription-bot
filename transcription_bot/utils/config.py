@@ -23,19 +23,25 @@ UNPROCESSABLE_EPISODES = {
 }
 
 
-_REQUIRED_ENV_VARS = [
-    "wiki_username",
-    "wiki_password",
-    "azure_subscription_key",
-    "azure_service_region",
-    "ngrok_token",
-    "openai_organization",
-    "openai_project",
-    "openai_api_key",
-    "pyannote_token",
+# Credentials that are only required when a specific backend is selected. This keeps
+# free/local runs from demanding paid-service keys. Each entry: (var, when-condition).
+_BACKEND_REQUIRED_ENV_VARS = [
+    # Paid ASR
+    ("azure_subscription_key", Validator("transcription_backend", eq="azure")),
+    ("azure_service_region", Validator("transcription_backend", eq="azure")),
+    # Paid diarization
+    ("pyannote_token", Validator("diarization_backend", eq="pyannote_ai")),
+    ("ngrok_token", Validator("diarization_backend", eq="pyannote_ai")),
+    # Free local diarization needs a (free) HuggingFace token to pull gated models
+    ("hf_token", Validator("diarization_backend", eq="local_pyannote")),
+    # Paid LLM
+    ("openai_organization", Validator("llm_backend", eq="openai")),
+    ("openai_project", Validator("llm_backend", eq="openai")),
+    ("openai_api_key", Validator("llm_backend", eq="openai")),
 ]
 
-_REQUIRED_ONLY_IN_PROD_ENV_VARS = ["sentry_dsn", "cronitor_api_key", "cronitor_job_id"]
+# Wiki credentials are only needed to publish (prod). "Output first" dev runs skip them.
+_PROD_ONLY_ENV_VARS = ["wiki_username", "wiki_password", "sentry_dsn", "cronitor_api_key", "cronitor_job_id"]
 
 
 class ConfigProto(Protocol):
@@ -59,6 +65,27 @@ class ConfigProto(Protocol):
     # RSS feeds
     podcast_rss_url: str
     wiki_rss_url: str
+
+    # Backend selection
+    transcription_backend: str
+    diarization_backend: str
+    llm_backend: str
+
+    # Local Whisper (faster-whisper)
+    whisper_model: str
+    whisper_device: str
+    whisper_compute_type: str
+    whisper_beam_size: int
+
+    # Local diarization (pyannote.audio)
+    hf_token: str
+    diarization_pipeline: str
+    diarization_device: str
+    voiceprint_dir: str
+
+    # Local LLM (ollama)
+    ollama_base_url: str
+    ollama_model: str
 
     # Wiki
     wiki_username: str
@@ -100,7 +127,18 @@ _prod_only_validators = [
         messages={"operations": "{name} must not be blank when in production"},
         when=Validator("local_mode", eq=False),
     )
-    for var_name in _REQUIRED_ONLY_IN_PROD_ENV_VARS
+    for var_name in _PROD_ONLY_ENV_VARS
+]
+
+_backend_validators = [
+    Validator(
+        var_name,
+        required=True,
+        ne="",
+        messages={"operations": "{name} must not be blank for the selected backend"},
+        when=when_condition,
+    )
+    for var_name, when_condition in _BACKEND_REQUIRED_ENV_VARS
 ]
 
 config = Dynaconf(
@@ -118,8 +156,5 @@ config = cast("ConfigProto", config)
 
 config.validators.register(
     *_prod_only_validators,
-    *(
-        Validator(env_var, required=True, ne="", messages={"operations": "{name} must not be blank"})
-        for env_var in _REQUIRED_ENV_VARS
-    ),
+    *_backend_validators,
 )
