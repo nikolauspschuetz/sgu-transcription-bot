@@ -38,6 +38,15 @@ dev = [
     "ruff>=0.8",
 ]
 scripts = ["flask>=3", "ngrok<1.6.0", "pydub>=0.25"]
+# Free/local ASR + diarization stack. Install with: uv sync --group local
+# On a CUDA box, install the matching torch build first (see SETUP.md).
+local = [
+    "faster-whisper>=1.0",
+    "pyannote.audio>=3.1",
+    "torch>=2.2",
+    "torchaudio>=2.2",
+    "soundfile>=0.12",
+]
 
 [build-system]
 requires = ["hatchling"]
