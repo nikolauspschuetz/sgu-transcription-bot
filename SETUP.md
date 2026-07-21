@@ -9,10 +9,13 @@ See `PLAN.md` for the architecture and the GitHub issues for the work backlog.
 ## Clone (on the GPU box)
 
 ```bash
-git clone https://github.com/nikolauspschuetz/transcription-bot.git
-cd transcription-bot
+git clone git@github.com:nikolauspschuetz/sgu-transcription-bot.git
+cd sgu-transcription-bot
 git checkout local-backend        # the working branch
 ```
+
+(Uses SSH; the box's `~/.ssh` key for `nikolauspschuetz` must be added to GitHub first.
+HTTPS alternative: `git clone https://github.com/nikolauspschuetz/sgu-transcription-bot.git`.)
 
 ## Prerequisites
 
