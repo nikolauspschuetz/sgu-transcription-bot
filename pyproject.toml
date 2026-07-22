@@ -69,6 +69,7 @@ orchestration = [
 # Ollama is called via its OpenAI-compatible endpoint (the `openai` base dep).
 llm = [
     "langfuse>=2",
+    "dspy>=2.5",
 ]
 
 [build-system]

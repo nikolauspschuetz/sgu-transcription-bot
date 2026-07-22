@@ -1,0 +1,120 @@
+# Langfuse self-hosted v3 — LLM tracing for the segmentation layer (#6/#12/#14).
+#
+# Opt-in overlay (heavy: web + worker + postgres + clickhouse + redis + minio):
+#   docker compose -f docker-compose.yml -f docker-compose.langfuse.yml up -d
+#
+# UI at http://localhost:3001 (3000 is Dagster). LANGFUSE_INIT_* auto-provisions an
+# org/project + fixed API keys on first boot, so the app can send traces with no manual
+# UI step. Local dev secrets only — do not reuse anywhere real.
+
+x-langfuse-env: &langfuse-env
+  DATABASE_URL: postgresql://postgres:postgres@langfuse-postgres:5432/postgres
+  SALT: "sgu-local-salt"
+  ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+  NEXTAUTH_URL: http://localhost:3001
+  NEXTAUTH_SECRET: "sgu-local-nextauth-secret"
+  CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+  CLICKHOUSE_URL: http://clickhouse:8123
+  CLICKHOUSE_USER: clickhouse
+  CLICKHOUSE_PASSWORD: clickhouse
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  REDIS_HOST: langfuse-redis
+  REDIS_PORT: "6379"
+  REDIS_AUTH: langfuse-redis-pass
+  LANGFUSE_S3_EVENT_UPLOAD_ENABLED: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  TELEMETRY_ENABLED: "false"
+  LANGFUSE_INIT_ORG_ID: sgu
+  LANGFUSE_INIT_ORG_NAME: SGU
+  LANGFUSE_INIT_PROJECT_ID: sgu-transcription
+  LANGFUSE_INIT_PROJECT_NAME: sgu-transcription
+  LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-1234567890abcdef1234567890abcdef
+  LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-1234567890abcdef1234567890abcdef
+  LANGFUSE_INIT_USER_EMAIL: admin@sgu.local
+  LANGFUSE_INIT_USER_NAME: Admin
+  LANGFUSE_INIT_USER_PASSWORD: langfuse123
+
+services:
+  langfuse-web:
+    image: langfuse/langfuse:3
+    restart: unless-stopped
+    depends_on:
+      langfuse-postgres: {condition: service_healthy}
+      clickhouse: {condition: service_healthy}
+      minio: {condition: service_started}
+      langfuse-redis: {condition: service_started}
+    ports:
+      - "3001:3000"
+    environment:
+      <<: *langfuse-env
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    restart: unless-stopped
+    depends_on:
+      langfuse-postgres: {condition: service_healthy}
+      clickhouse: {condition: service_healthy}
+      minio: {condition: service_started}
+      langfuse-redis: {condition: service_started}
+    environment:
+      <<: *langfuse-env
+
+  langfuse-postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - langfuse-pgdata:/var/lib/postgresql/data
+
+  clickhouse:
+    image: clickhouse/clickhouse-server
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+    volumes:
+      - langfuse-clickhouse-data:/var/lib/clickhouse
+
+  langfuse-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "langfuse-redis-pass"]
+
+  minio:
+    image: minio/minio
+    restart: unless-stopped
+    # The image entrypoint is `minio`; override to a shell so we can pre-create the bucket
+    # (single-drive minio = one dir per bucket) before starting the server.
+    entrypoint: ["sh", "-c"]
+    command:
+      - 'mkdir -p /data/langfuse && minio server /data --console-address ":9001"'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: miniosecret
+    volumes:
+      - langfuse-minio-data:/data
+
+volumes:
+  langfuse-pgdata:
+  langfuse-clickhouse-data:
+  langfuse-minio-data:

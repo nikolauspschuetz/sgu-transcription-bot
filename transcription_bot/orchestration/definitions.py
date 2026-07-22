@@ -80,4 +80,48 @@ def episode_outputs(context: AssetExecutionContext, diarized_transcript: list[di
     context.add_output_metadata({"outputs": [str(p) for p in paths]})
 
 
-defs = dg.Definitions(assets=[diarized_transcript, indexed_transcript, episode_outputs])
+@dg.asset(
+    partitions_def=episode_partitions,
+    deps=[indexed_transcript],
+    group_name="segmentation",
+    description="Detect host-announced segment transitions for an episode (Ollama, Langfuse-traced).",
+)
+def episode_segments(context: AssetExecutionContext) -> None:
+    from transcription_bot.interfaces.local_llm import segment_episode  # noqa: PLC0415
+
+    episode = int(context.partition_key)
+    segments = segment_episode(episode, model="gemma4:12b")
+    context.add_output_metadata(
+        {"segments_found": len(segments), "sample": dg.MetadataValue.json(segments[:5])}
+    )
+
+
+@dg.asset(
+    group_name="segmentation",
+    description="Compile the DSPy segmenter from cue-bootstrapped examples and save the artifact (#18).",
+)
+def compiled_segmenter(context: AssetExecutionContext) -> None:
+    from transcription_bot.interfaces.dspy_segmenter import compile_segmenter  # noqa: PLC0415
+
+    # Bootstrap the trainset from whatever episodes are indexed in the timestream.
+    from transcription_bot.metadata import store  # noqa: PLC0415
+
+    with store.connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT episode_number FROM transcript_segments ORDER BY 1")
+        episodes = [r[0] for r in cur.fetchall()]
+    if not episodes:
+        raise dg.Failure(description="No indexed episodes to bootstrap from; materialize indexed_transcript first.")
+
+    meta = compile_segmenter(episodes, model="gemma4:12b")
+    context.add_output_metadata({**meta, "bootstrap_episodes": episodes})
+
+
+defs = dg.Definitions(
+    assets=[
+        diarized_transcript,
+        indexed_transcript,
+        episode_outputs,
+        episode_segments,
+        compiled_segmenter,
+    ]
+)
