@@ -11,6 +11,7 @@ Design (per #18):
   hand labeling is needed for the clear cases.
 """
 
+import re
 from pathlib import Path
 
 import dspy
@@ -154,20 +155,31 @@ def _parse_ts(ref) -> float | None:  # noqa: ANN001
 
 
 def _resolve_to_segment(transition: dict, window_segments: list[dict]) -> dict | None:
-    """Map an LLM transition to a REAL transcript line (deterministic timestamps, #18).
+    """Map an LLM transition to a REAL transcript line via its evidence (deterministic ts, #18).
 
-    Never trust the model's timestamp: match its `evidence` phrase against the actual line
-    text and use that line's start time; fall back to snapping its `line_ref` to the
-    nearest real line. Return None (drop) if neither resolves.
+    Precision-first (#12): a detection is kept ONLY if its `evidence` phrase actually grounds
+    in a real line — exact substring, or strong token overlap to tolerate minor
+    paraphrase/ASR drift. There is NO timestamp-snap fallback: that manufactured
+    empty-evidence false positives (the 3B model's shotgun over-detection). Ungrounded or
+    trivial-evidence detections are dropped.
     """
     evidence = (transition.get("evidence") or "").lower().strip()
-    if evidence:
+    if len(evidence) < 8:
+        return None
+
+    for seg in window_segments:
+        if evidence in seg["text"].lower():
+            return seg
+
+    ev_tokens = set(re.findall(r"[a-z']+", evidence))
+    if len(ev_tokens) >= 3:
+        best, best_overlap = None, 0.6  # require >=60% of the evidence words to appear in the line
         for seg in window_segments:
-            if evidence in seg["text"].lower():
-                return seg
-    secs = _parse_ts(transition.get("line_ref") or transition.get("start_timestamp"))
-    if secs is not None and window_segments:
-        return min(window_segments, key=lambda s: abs(s["start"] - secs))
+            seg_tokens = set(re.findall(r"[a-z']+", seg["text"].lower()))
+            overlap = len(ev_tokens & seg_tokens) / len(ev_tokens)
+            if overlap > best_overlap:
+                best, best_overlap = seg, overlap
+        return best
     return None
 
 
