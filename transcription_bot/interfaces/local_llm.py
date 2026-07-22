@@ -85,24 +85,21 @@ def segment_window(lines: list[str], model: str | None = None) -> list[dict]:
 def segment_episode(
     episode_number: int,
     model: str | None = None,
-    window_minutes: int = 15,
+    window_minutes: int = 4,
     max_windows: int | None = None,
+    use_llm: bool = False,
     use_dspy: bool = False,
 ) -> list[dict]:
-    """Segment an episode into announced transitions, traced by Langfuse (#18/#19).
+    """Hybrid segmentation: cue-anchor (regex, primary) + optional LLM supplement (#12).
 
-    Reads the stored timestream, windows by wall-clock time, detects host-announced
-    transitions per window, and **resolves each to a REAL transcript line so the timestamp
-    is deterministic** (the LLM never supplies the time). Wrapped in ONE Langfuse trace per
-    episode (session = ``episode-<n>``) with a nested generation per window and a
-    ``cue_recall`` quality score vs the announced-transition ground truth.
-
-    Engine: default is the direct JSON-prompt path (fast, clean, auto-traced). ``use_dspy``
-    switches to the compiled DSPy program — correct but impractical with local *reasoning*
-    models (they bury the answer in a reasoning channel DSPy can't parse and run minutes per
-    call); use it once a JSON-clean model is available.
+    The **anchor pass** finds host-announced transitions ("it's X time", "let's move on
+    to …") with high precision and zero LLM cost — the reliable majority. With
+    ``use_llm=True`` an LLM pass adds candidate *un-announced* transitions, deduped against
+    anchors and Langfuse-traced. Timestamps are always resolved to a real line
+    deterministically. Default is anchor-only — the benchmark showed a local LLM adds mostly
+    noise on the announced transitions the regex already nails.
     """
-    from transcription_bot.interfaces import dspy_segmenter  # noqa: PLC0415
+    from transcription_bot.interfaces.cue_anchor import anchor_transitions  # noqa: PLC0415
     from transcription_bot.metadata import store  # noqa: PLC0415
 
     model = model or config.ollama_model
@@ -111,56 +108,67 @@ def segment_episode(
         logger.warning(f"No stored transcript for episode {episode_number}; index it first.")
         return []
 
+    anchors = anchor_transitions(segments)  # instant, high-precision primary pass
+    found = list(anchors)
+    if use_llm:
+        found = found + _llm_supplement(episode_number, segments, anchors, model, window_minutes, max_windows, use_dspy)
+    found.sort(key=lambda x: x["start_s"])
+
+    ground_truth = _cue_ground_truth(segments)
+    recovered = _recovered_count(ground_truth, found)
+    recall = recovered / len(ground_truth) if ground_truth else 1.0
+    logger.success(
+        f"Segmentation [{'anchor+llm' if use_llm else 'anchor'}]: {len(found)} segment(s) "
+        f"({len(anchors)} anchored), cue_recall={recall:.2f} for episode {episode_number}."
+    )
+    return found
+
+
+def _llm_supplement(
+    episode_number, segments, anchors, model, window_minutes, max_windows, use_dspy
+):  # noqa: ANN001
+    """LLM pass for un-announced transitions; deduped against anchors; Langfuse-traced."""
+    from transcription_bot.interfaces import dspy_segmenter  # noqa: PLC0415
+
     windows = _windows(segments, window_minutes * 60)
     if max_windows:
         windows = windows[:max_windows]
     module = dspy_segmenter.load_segmenter(model) if use_dspy else None
     logger.info(
-        f"Segmenting episode {episode_number}: {len(segments)} lines, {len(windows)} window(s), "
-        f"model={model}, engine={'dspy' if use_dspy else 'json-prompt'}."
+        f"LLM supplement: {len(windows)} window(s), model={model}, engine={'dspy' if use_dspy else 'json-prompt'}."
     )
 
     lf = _langfuse_client()
-    found: list[dict] = []
-    recall = 1.0
+    llm_found: list[dict] = []
     with contextlib.ExitStack() as stack:
         if lf is not None:
             from langfuse import propagate_attributes  # noqa: PLC0415
 
             stack.enter_context(
-                propagate_attributes(session_id=f"episode-{episode_number}", tags=["segmentation", model, "dspy"])
+                propagate_attributes(session_id=f"episode-{episode_number}", tags=["segmentation", model, "llm-supplement"])
             )
             stack.enter_context(
                 lf.start_as_current_observation(
                     name=f"segment_episode:{episode_number}",
                     as_type="span",
-                    input={"episode": episode_number, "windows": len(windows), "model": model},
+                    input={"episode": episode_number, "windows": len(windows), "anchors": len(anchors)},
                 )
             )
-
         for window in windows:
-            found.extend(_detect_in_window(lf, window, module, model, use_dspy))
-
-        ground_truth = _cue_ground_truth(segments)
-        recovered = _recovered_count(ground_truth, found)
-        recall = recovered / len(ground_truth) if ground_truth else 1.0
+            llm_found.extend(_detect_in_window(lf, window, module, model, use_dspy))
+        # Keep only LLM detections NOT already covered by an anchor (same type within 90s).
+        novel = [
+            f
+            for f in llm_found
+            if not any(a["type"] == f["type"] and abs(a["start_s"] - f["start_s"]) <= 90 for a in anchors)
+        ]
         if lf is not None:
-            try:
-                lf.update_current_span(output={"segment_count": len(found), "segments": found[:20]})
-                lf.score_current_trace(
-                    name="cue_recall",
-                    value=round(recall, 3),
-                    comment=f"{recovered}/{len(ground_truth)} announced transitions recovered",
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(f"Langfuse scoring failed: {exc!r}")
-
+            with contextlib.suppress(Exception):
+                lf.update_current_span(output={"llm_detected": len(llm_found), "novel_vs_anchors": len(novel)})
     if lf is not None:
         with contextlib.suppress(Exception):
             lf.flush()
-
-    logger.success(f"Segmentation: {len(found)} segment(s), cue_recall={recall:.2f} for episode {episode_number}.")
-    return found
+    return novel
 
 
 def _windows(segments: list[dict], window_s: int) -> list[list[dict]]:
