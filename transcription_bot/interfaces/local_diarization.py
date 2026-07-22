@@ -210,23 +210,11 @@ def name_speakers(episode_number: int, diarization: pd.DataFrame, threshold: flo
     if not embeddings:
         return diarization
 
-    enrolled = roster_lib.load_roster().enrolled()
-    if not enrolled:
+    match_fn = _resolve_matcher(threshold)
+    if match_fn is None:
         return diarization
 
-    refs = [(m.display_name, _l2_normalize(m.load_embedding())) for m in enrolled]  # pyright: ignore[reportArgumentType]
-
-    mapping: dict[str, str] = {}
-    for label, vec in embeddings.items():
-        cluster = _l2_normalize(vec)
-        best_name, best_sim = None, threshold
-        for name, ref in refs:
-            sim = float(np.dot(cluster, ref))
-            if sim > best_sim:
-                best_name, best_sim = name, sim
-        if best_name is not None:
-            mapping[label] = best_name
-
+    mapping: dict[str, str] = {label: name for label, vec in embeddings.items() if (name := match_fn(vec))}
     if not mapping:
         return diarization
 
@@ -234,6 +222,49 @@ def name_speakers(episode_number: int, diarization: pd.DataFrame, threshold: flo
     named["speaker"] = named["speaker"].map(lambda s: mapping.get(s, s))
     logger.success(f"Named {len(mapping)} of {len(embeddings)} clusters: {mapping}")
     return named
+
+
+def _resolve_matcher(threshold: float):  # noqa: ANN202
+    """A ``cluster_embedding -> member_name | None`` matcher: metadata store first, else files.
+
+    Prefers the pgvector store (the source of truth, #13); if it's unreachable or has no
+    enrolled voiceprints, falls back to the file-based roster voiceprints so the pipeline
+    still runs without the DB.
+    """
+    try:
+        from transcription_bot.metadata import store  # noqa: PLC0415
+
+        with store.connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM voiceprints")
+            enrolled_count = cur.fetchone()[0]
+        if enrolled_count:
+            logger.info(f"Speaker naming via metadata store (pgvector): {enrolled_count} voiceprint(s).")
+
+            def _db_match(vec: np.ndarray) -> str | None:
+                hit = store.match_speaker(vec, threshold=threshold)
+                return hit["display_name"] if hit else None
+
+            return _db_match
+        logger.info("Metadata store reachable but empty; trying file voiceprints.")
+    except Exception as exc:  # noqa: BLE001 - DB optional; degrade to files
+        logger.warning(f"Metadata store unavailable ({type(exc).__name__}); using file voiceprints.")
+
+    enrolled = roster_lib.load_roster().enrolled()
+    if not enrolled:
+        return None
+    refs = [(m.display_name, _l2_normalize(m.load_embedding())) for m in enrolled]  # pyright: ignore[reportArgumentType]
+    logger.info(f"Speaker naming via file voiceprints: {len(refs)} enrolled.")
+
+    def _file_match(vec: np.ndarray) -> str | None:
+        cluster = _l2_normalize(vec)
+        best_name, best_sim = None, threshold
+        for name, ref in refs:
+            sim = float(np.dot(cluster, ref))
+            if sim > best_sim:
+                best_name, best_sim = name, sim
+        return best_name
+
+    return _file_match
 
 
 def _l2_normalize(vec: np.ndarray) -> np.ndarray:

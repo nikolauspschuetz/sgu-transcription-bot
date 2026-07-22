@@ -114,6 +114,50 @@ def match_speaker(embedding: np.ndarray, threshold: float = 0.5) -> dict | None:
     return None
 
 
+def save_transcript(episode_number: int, transcript: list[dict]) -> int:
+    """Persist a diarized transcript as the episode's timestream segments (replace-per-episode).
+
+    ``transcript`` is a list of {start, end, text, speaker}. Returns the row count.
+    """
+    rows = [
+        (episode_number, seq, float(c["start"]), float(c["end"]), str(c["speaker"]), str(c["text"]))
+        for seq, c in enumerate(transcript)
+    ]
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM transcript_segments WHERE episode_number = %s", (episode_number,))
+        cur.executemany(
+            """INSERT INTO transcript_segments (episode_number, seq, start_s, end_s, speaker, text)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            rows,
+        )
+        conn.commit()
+    return len(rows)
+
+
+def search_transcript(query: str, episode_number: int | None = None, limit: int = 10) -> list[dict]:
+    """Full-text search across the transcript timestream (ranked). Optionally scope to one episode."""
+    sql = """
+        SELECT episode_number, start_s, end_s, speaker, text,
+               ts_rank(tsv, websearch_to_tsquery('english', %s)) AS rank
+        FROM transcript_segments
+        WHERE tsv @@ websearch_to_tsquery('english', %s)
+    """
+    params: list = [query, query]
+    if episode_number is not None:
+        sql += " AND episode_number = %s"
+        params.append(episode_number)
+    sql += " ORDER BY rank DESC, episode_number, start_s LIMIT %s"
+    params.append(limit)
+
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return [
+        {"episode": r[0], "start": r[1], "end": r[2], "speaker": r[3], "text": r[4], "rank": float(r[5])}
+        for r in rows
+    ]
+
+
 def _l2_normalize(vec: np.ndarray) -> np.ndarray:
     norm = float(np.linalg.norm(vec))
     return vec if norm == 0 else vec / norm
