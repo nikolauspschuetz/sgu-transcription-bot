@@ -1,0 +1,34 @@
+# Local, free/OSS backing services for the SGU pipeline (issue #14).
+# Start:  docker compose up -d
+# The metadata/identity layer (#13) lives in Postgres + pgvector.
+#
+# NOTE (Apple Silicon): Docker can't use the M4 Metal GPU, so heavy ASR/diarization
+# stays on the native `uv` path. This stack is the data/orchestration backing — the
+# portable/CI/Linux path — not where Whisper/pyannote run on the Mac.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: sgu-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sgu
+      POSTGRES_PASSWORD: sgu
+      POSTGRES_DB: sgu
+    ports:
+      - "5432:5432"
+    volumes:
+      - sgu-pgdata:/var/lib/postgresql/data
+      # DDL layer: *.sql here run once on first init (empty data volume). Versioned in ./sql.
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sgu -d sgu"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  # Added in later slices (issue #14): dagster, langfuse (+ its clickhouse/redis),
+  # ollama. Kept out until there's an LLM call to trace / a DAG to orchestrate.
+
+volumes:
+  sgu-pgdata:

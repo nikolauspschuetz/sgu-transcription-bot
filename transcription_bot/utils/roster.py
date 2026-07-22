@@ -29,7 +29,10 @@ import numpy as np
 from transcription_bot.utils.config import DATA_FOLDER, config
 
 ROSTER_FILE = DATA_FOLDER / "roster.toml"
-_DEFAULT_VOICEPRINT_DIR = DATA_FOLDER / "voiceprints"
+# Reference voiceprints live under the gitignored /data/ tree (cwd-relative), beside
+# the per-episode embeddings — local trained state, regenerable via enrollment. Override
+# with config.voiceprint_dir / TB_VOICEPRINT_DIR.
+_DEFAULT_VOICEPRINT_DIR = Path("data/voiceprints")
 
 
 @dataclass(frozen=True)

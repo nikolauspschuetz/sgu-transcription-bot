@@ -53,6 +53,12 @@ local = [
 local-mlx = [
     "mlx-whisper>=0.4",
 ]
+# Metadata store: canonical identity/attribution layer (Postgres + pgvector).
+# Install: uv sync --group db   (Postgres runs via docker-compose.yml)
+db = [
+    "psycopg[binary]>=3.1",
+    "pgvector>=0.3",
+]
 
 [build-system]
 requires = ["hatchling"]

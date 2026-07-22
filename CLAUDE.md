@@ -11,7 +11,7 @@ a paid credential, you're on the wrong backend. (Building *products on top of* t
 finished corpus is fine — the rule governs pipeline **dependencies**, not products.)
 
 ## Environment (Apple Silicon / M4)
-- Python via `uv`. Deps: `uv sync --group local --group local-mlx`.
+- Python via `uv`. Deps: `uv sync --group local --group local-mlx --group db`. **Sync all runtime groups together** — `uv sync --group X` alone removes the others (see the `uv-deps` skill).
 - `ffmpeg` required (Whisper + diarization WAV transcode). Export `PYTORCH_ENABLE_MPS_FALLBACK=1` for pyannote on `mps`.
 - HuggingFace: `hf auth login` (cached token is honored; `TB_HF_TOKEN` optional). Accept the gated terms for the pyannote pipeline (`speaker-diarization-community-1`, `segmentation-3.0`, `wespeaker-voxceleb-resnet34-LM`).
 - Config: `transcription_bot/data/config.toml`, overridden by `.env` (`TB_` prefix; gitignored). Profile B = Apple Silicon (MLX GPU ASR + pyannote on mps).
@@ -51,6 +51,14 @@ cosine-match cluster embeddings against enrolled member voiceprints
 (`data/voiceprints/<id>.npy`) and relabel via `display_name`. It's a **no-op until a
 voice is enrolled**. Enroll from a self-identifying cluster
 (`roster.enroll_embedding(id, vec)`); each human correction becomes a durable reference.
+
+## Data layer (metadata store, #13)
+Canonical identity/attribution lives in **Postgres + pgvector** (`docker compose up -d`).
+`transcription_bot/metadata/store.py` = the store; `roster.toml` seeds it via
+`uv run python -m transcription_bot.entrypoints.seed_metadata`. Members registry +
+`voiceprints` (embedding vectors keyed by member id); speaker matching is an in-DB cosine
+search (`match_speaker()`). The file-based roster/voiceprints remain the bootstrap; the DB
+is the source of truth going forward. `TB_DATABASE_URL` overrides the connection.
 
 ## Wiki (publish target)
 `sgutranscripts.org` is MediaWiki 1.43; "version control" is its native page-revision
