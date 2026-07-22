@@ -10,6 +10,7 @@ call; otherwise it degrades to the plain OpenAI client with no tracing. This is 
 single-pass windowed segmenter — the agentic/ensemble refinement is #12.
 """
 
+import contextlib
 import json
 
 from loguru import logger
@@ -73,32 +74,169 @@ def segment_window(lines: list[str], model: str | None = None) -> list[dict]:
         return []
 
 
-def segment_episode(episode_number: int, model: str | None = None, window_minutes: int = 30) -> list[dict]:
-    """Segment an episode from its stored timestream, windowing by wall-clock time.
+def segment_episode(
+    episode_number: int,
+    model: str | None = None,
+    window_minutes: int = 15,
+    max_windows: int | None = None,
+    use_dspy: bool = False,
+) -> list[dict]:
+    """Segment an episode into announced transitions, traced by Langfuse (#18/#19).
 
-    Reads `transcript_segments` from the metadata store, splits into `window_minutes`
-    buckets, and asks the LLM for the announced boundaries in each. Returns the merged,
-    time-ordered list of segments. (v1 single-pass; ensemble/coverage is #12.)
+    Reads the stored timestream, windows by wall-clock time, detects host-announced
+    transitions per window, and **resolves each to a REAL transcript line so the timestamp
+    is deterministic** (the LLM never supplies the time). Wrapped in ONE Langfuse trace per
+    episode (session = ``episode-<n>``) with a nested generation per window and a
+    ``cue_recall`` quality score vs the announced-transition ground truth.
+
+    Engine: default is the direct JSON-prompt path (fast, clean, auto-traced). ``use_dspy``
+    switches to the compiled DSPy program — correct but impractical with local *reasoning*
+    models (they bury the answer in a reasoning channel DSPy can't parse and run minutes per
+    call); use it once a JSON-clean model is available.
     """
+    from transcription_bot.interfaces import dspy_segmenter  # noqa: PLC0415
     from transcription_bot.metadata import store  # noqa: PLC0415
 
+    model = model or config.ollama_model
     segments = store.get_transcript_segments(episode_number)
     if not segments:
         logger.warning(f"No stored transcript for episode {episode_number}; index it first.")
         return []
 
-    model = model or config.ollama_model
-    window_s = window_minutes * 60
-    windows: dict[int, list[dict]] = {}
-    for seg in segments:
-        windows.setdefault(int(seg["start"] // window_s), []).append(seg)
+    windows = _windows(segments, window_minutes * 60)
+    if max_windows:
+        windows = windows[:max_windows]
+    module = dspy_segmenter.load_segmenter(model) if use_dspy else None
+    logger.info(
+        f"Segmenting episode {episode_number}: {len(segments)} lines, {len(windows)} window(s), "
+        f"model={model}, engine={'dspy' if use_dspy else 'json-prompt'}."
+    )
 
-    logger.info(f"Segmenting episode {episode_number}: {len(segments)} lines, {len(windows)} window(s), model={model}.")
+    lf = _langfuse_client()
     found: list[dict] = []
-    for bucket in sorted(windows):
-        lines = [f"[{_fmt_ts(s['start'])}] {s['speaker']}: {s['text']}" for s in windows[bucket]]
-        found.extend(segment_window(lines, model))
+    recall = 1.0
+    with contextlib.ExitStack() as stack:
+        if lf is not None:
+            from langfuse import propagate_attributes  # noqa: PLC0415
 
-    found.sort(key=lambda x: x.get("start_timestamp", ""))
-    logger.success(f"Segmentation found {len(found)} boundary/segment(s) for episode {episode_number}.")
+            stack.enter_context(
+                propagate_attributes(session_id=f"episode-{episode_number}", tags=["segmentation", model, "dspy"])
+            )
+            stack.enter_context(
+                lf.start_as_current_observation(
+                    name=f"segment_episode:{episode_number}",
+                    as_type="span",
+                    input={"episode": episode_number, "windows": len(windows), "model": model},
+                )
+            )
+
+        for window in windows:
+            found.extend(_detect_in_window(lf, window, module, model, use_dspy))
+
+        ground_truth = _cue_ground_truth(segments)
+        recovered = _recovered_count(ground_truth, found)
+        recall = recovered / len(ground_truth) if ground_truth else 1.0
+        if lf is not None:
+            try:
+                lf.update_current_span(output={"segment_count": len(found), "segments": found[:20]})
+                lf.score_current_trace(
+                    name="cue_recall",
+                    value=round(recall, 3),
+                    comment=f"{recovered}/{len(ground_truth)} announced transitions recovered",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Langfuse scoring failed: {exc!r}")
+
+    if lf is not None:
+        with contextlib.suppress(Exception):
+            lf.flush()
+
+    logger.success(f"Segmentation: {len(found)} segment(s), cue_recall={recall:.2f} for episode {episode_number}.")
     return found
+
+
+def _windows(segments: list[dict], window_s: int) -> list[list[dict]]:
+    buckets: dict[int, list[dict]] = {}
+    for seg in segments:
+        buckets.setdefault(int(seg["start"] // window_s), []).append(seg)
+    return [buckets[k] for k in sorted(buckets)]
+
+
+def _langfuse_client():  # noqa: ANN202
+    """An authenticated Langfuse client, or None if tracing isn't configured/reachable."""
+    try:
+        from langfuse import get_client  # noqa: PLC0415
+
+        client = get_client()
+        return client if client.auth_check() else None
+    except Exception:  # noqa: BLE001 - tracing is optional
+        return None
+
+
+def _detect_in_window(lf, window, module, model, use_dspy):  # noqa: ANN001
+    """Detect + deterministically timestamp-resolve transitions in one window."""
+    from transcription_bot.interfaces import dspy_segmenter as _d  # noqa: PLC0415
+
+    if not use_dspy:
+        # Direct JSON prompt — fast/clean, and auto-traced by langfuse.openai under the
+        # active episode span. Resolve the model's hits to real lines (deterministic ts).
+        lines = [f"[{_fmt_ts(s['start'])}] {s['speaker']}: {s['text']}" for s in window]
+        return _resolve_transitions(segment_window(lines, model), window)
+
+    # DSPy path (opt-in): litellm isn't auto-traced, so wrap a manual generation span.
+    if lf is None:
+        return _d.detect_transitions(window, module)
+    lines_str = "\n".join(f"[{_fmt_ts(s['start'])}] {s['speaker']}: {s['text']}" for s in window)
+    with lf.start_as_current_observation(name="segment_window", as_type="generation", model=model, input=lines_str) as gen:
+        result = _d.detect_transitions(window, module)
+        with contextlib.suppress(Exception):
+            gen.update(output=result)
+        return result
+
+
+def _resolve_transitions(raw, window):  # noqa: ANN001
+    """Map raw LLM transitions to real transcript lines (deterministic timestamps, #18)."""
+    from transcription_bot.interfaces.dspy_segmenter import _resolve_to_segment  # noqa: PLC0415
+
+    out, seen = [], set()
+    for t in raw or []:
+        if not isinstance(t, dict):
+            continue
+        seg = _resolve_to_segment(t, window)
+        if seg is None:
+            continue
+        key = (t.get("type") or "other", round(seg["start"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "type": t.get("type") or "other",
+                "evidence": (t.get("evidence") or t.get("title") or "")[:120],
+                "start_s": float(seg["start"]),
+                "start_ts": _fmt_ts(seg["start"]),
+                "speaker": seg["speaker"],
+            }
+        )
+    return out
+
+
+def _cue_ground_truth(segments: list[dict]) -> list[dict]:
+    """Announced transitions found by simple cue patterns — the score's ground truth."""
+    from transcription_bot.interfaces.dspy_segmenter import _CUES  # noqa: PLC0415
+
+    ground_truth = []
+    for seg in segments:
+        low = seg["text"].lower()
+        for cue, seg_type in _CUES.items():
+            if cue in low:
+                ground_truth.append({"type": seg_type, "start_s": float(seg["start"])})
+                break
+    return ground_truth
+
+
+def _recovered_count(ground_truth: list[dict], found: list[dict], tol_s: float = 90.0) -> int:
+    return sum(
+        any(f["type"] == g["type"] and abs(f["start_s"] - g["start_s"]) <= tol_s for f in found)
+        for g in ground_truth
+    )
