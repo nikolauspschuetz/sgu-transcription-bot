@@ -25,6 +25,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -32,6 +33,18 @@ from transcription_bot.interfaces._audio import get_episode_audio_path
 from transcription_bot.models.data_models import PodcastRssEntry
 from transcription_bot.utils.caching import cache_for_episode
 from transcription_bot.utils.config import config
+from transcription_bot.utils import roster as roster_lib
+
+# Per-episode cluster embeddings live under the gitignored /data/ tree (not package
+# data), one .npz per episode mapping SPEAKER_NN -> embedding vector. Captured from
+# pyannote 4.x's DiarizeOutput.speaker_embeddings so local speaker naming (#5) and
+# enrollment can run without re-diarizing.
+_EPISODE_EMBED_DIR = Path("data/embeddings")
+
+# Cosine-similarity floor for accepting a cluster<->member match. wespeaker/pyannote
+# embeddings put same-speaker pairs well above this and different speakers below it;
+# tune against real episodes. Unmatched clusters stay SPEAKER_NN for human review.
+_NAMING_THRESHOLD = 0.5
 
 
 def _ensure_wav16k(audio_path: Path) -> Path:
@@ -149,6 +162,81 @@ def create_diarization(rss_entry: PodcastRssEntry) -> pd.DataFrame | None:
         logger.warning("Local diarization produced no speaker turns.")
         return None
 
+    _capture_cluster_embeddings(rss_entry, result)
+
     speaker_count = len({row["speaker"] for row in rows})
     logger.success(f"Local diarization complete: {len(rows)} turns across {speaker_count} speakers.")
     return pd.DataFrame(rows, columns=["start", "end", "speaker"])
+
+
+def _capture_cluster_embeddings(rss_entry: PodcastRssEntry, result) -> None:  # noqa: ANN001
+    """Persist SPEAKER_NN -> embedding vectors from a pyannote 4.x DiarizeOutput.
+
+    No-op for a plain Annotation (3.x) or when embeddings are absent. Stored as one
+    .npz per episode so naming (#5) and enrollment run without re-diarizing.
+    """
+    embeddings = getattr(result, "speaker_embeddings", None)
+    diar = getattr(result, "speaker_diarization", None)
+    if embeddings is None or diar is None:
+        return
+    labels = list(diar.labels())  # embeddings are sorted in this label order
+    if len(labels) != len(embeddings):
+        logger.warning(f"Embedding/label mismatch ({len(embeddings)} vs {len(labels)}); skipping capture.")
+        return
+    _EPISODE_EMBED_DIR.mkdir(parents=True, exist_ok=True)
+    path = _EPISODE_EMBED_DIR / f"{rss_entry.episode_number}.npz"
+    np.savez(path, **{label: np.asarray(vec, dtype=np.float32) for label, vec in zip(labels, embeddings)})
+    logger.info(f"Captured {len(labels)} speaker embeddings -> {path}")
+
+
+def load_episode_embeddings(episode_number: int) -> dict[str, np.ndarray] | None:
+    """Load captured SPEAKER_NN -> embedding vectors for an episode, if present."""
+    path = _EPISODE_EMBED_DIR / f"{episode_number}.npz"
+    if not path.exists():
+        return None
+    data = np.load(path)
+    return {key: data[key] for key in data.files}
+
+
+def name_speakers(episode_number: int, diarization: pd.DataFrame, threshold: float = _NAMING_THRESHOLD) -> pd.DataFrame:
+    """Relabel SPEAKER_NN clusters with roster names via cosine-matched voiceprints.
+
+    Returns ``diarization`` unchanged when no per-episode embeddings were captured or
+    no roster members are enrolled — so it is a safe no-op until voices are enrolled.
+    Multiple clusters may map to the same member (this merges over-split clusters);
+    clusters below ``threshold`` keep their SPEAKER_NN label for human review (#5).
+    """
+    embeddings = load_episode_embeddings(episode_number)
+    if not embeddings:
+        return diarization
+
+    enrolled = roster_lib.load_roster().enrolled()
+    if not enrolled:
+        return diarization
+
+    refs = [(m.display_name, _l2_normalize(m.load_embedding())) for m in enrolled]  # pyright: ignore[reportArgumentType]
+
+    mapping: dict[str, str] = {}
+    for label, vec in embeddings.items():
+        cluster = _l2_normalize(vec)
+        best_name, best_sim = None, threshold
+        for name, ref in refs:
+            sim = float(np.dot(cluster, ref))
+            if sim > best_sim:
+                best_name, best_sim = name, sim
+        if best_name is not None:
+            mapping[label] = best_name
+
+    if not mapping:
+        return diarization
+
+    named = diarization.copy()
+    named["speaker"] = named["speaker"].map(lambda s: mapping.get(s, s))
+    logger.success(f"Named {len(mapping)} of {len(embeddings)} clusters: {mapping}")
+    return named
+
+
+def _l2_normalize(vec: np.ndarray) -> np.ndarray:
+    vec = np.asarray(vec, dtype=np.float32)
+    norm = float(np.linalg.norm(vec))
+    return vec if norm == 0 else vec / norm

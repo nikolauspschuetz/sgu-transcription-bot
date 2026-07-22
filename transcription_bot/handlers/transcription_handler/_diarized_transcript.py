@@ -46,7 +46,22 @@ def get_diarized_transcript(rss_entry: PodcastRssEntry) -> DiarizedTranscript | 
     if diarization is None:
         return None
 
+    diarization = _name_speakers(rss_entry, diarization)
+
     return merge_transcript_and_diarization(transcription, diarization)
+
+
+def _name_speakers(rss_entry: PodcastRssEntry, diarization: "pd.DataFrame") -> "pd.DataFrame":
+    """Relabel SPEAKER_NN clusters with roster names (issue #5), local backend only.
+
+    No-op unless the local pyannote backend captured per-episode embeddings and the
+    roster has enrolled voiceprints; unmatched clusters stay SPEAKER_NN for review.
+    """
+    if config.diarization_backend != "local_pyannote":
+        return diarization
+    from transcription_bot.interfaces.local_diarization import name_speakers  # noqa: PLC0415
+
+    return name_speakers(rss_entry.episode_number, diarization)
 
 
 def merge_transcript_and_diarization(transcription: RawTranscript, diarization: "pd.DataFrame") -> DiarizedTranscript:
