@@ -20,3 +20,6 @@ cov.xml
 
 # Node
 node_modules/
+
+# Generated transcript artifacts (VTT/MD/wiki) — output-first, not source
+/output/

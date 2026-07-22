@@ -32,8 +32,11 @@ _BACKEND_REQUIRED_ENV_VARS = [
     # Paid diarization
     ("pyannote_token", Validator("diarization_backend", eq="pyannote_ai")),
     ("ngrok_token", Validator("diarization_backend", eq="pyannote_ai")),
-    # Free local diarization needs a (free) HuggingFace token to pull gated models
-    ("hf_token", Validator("diarization_backend", eq="local_pyannote")),
+    # NOTE: local_pyannote also needs a (free) HuggingFace token to pull gated models,
+    # but that token may come EITHER from TB_HF_TOKEN or from a cached `hf auth login`
+    # (~/.cache/huggingface/token). Because it has two valid sources, it is not a simple
+    # required-env-var here — the diarization backend resolves and checks it at call time
+    # (see interfaces/local_diarization.py::_resolve_hf_token).
     # Paid LLM
     ("openai_organization", Validator("llm_backend", eq="openai")),
     ("openai_project", Validator("llm_backend", eq="openai")),

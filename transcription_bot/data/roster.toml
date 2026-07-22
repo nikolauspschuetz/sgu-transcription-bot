@@ -1,0 +1,148 @@
+# ---------------------------------------------------------------------------
+# SGU identity roster — the cast ("rogues") and guests of the show.
+#
+# PURPOSE
+#   Single source of truth for WHO speaks on the show and how they should be
+#   named in transcripts. Drives local speaker naming (issue #5): diarization
+#   emits anonymous clusters (SPEAKER_00, SPEAKER_01, ...); we cosine-match each
+#   cluster's voice embedding against the reference embedding declared here and
+#   relabel it with `display_name`.
+#
+# SCHEMA (every person — host, rogue, or guest — is one [[member]] block)
+#   id                  stable kebab-case slug; NEVER change it once set (keys
+#                       reference audio, embeddings, and past corrections).
+#   display_name        what appears in the transcript (e.g. "Steve").
+#   full_name           real/legal name (e.g. "Steven Novella").
+#   role                "host" | "rogue" | "guest"
+#   status              "current" | "former" | "guest"
+#   active_from         first appearance — ISO date and/or episode number.
+#   active_to           last appearance for former members (else omit).
+#   aliases             other spellings the ASR/hosts use; helps map spoken
+#                       self-introductions ("this is Steven Novella") to `id`.
+#   bio                 one-line who-they-are (for docs/ and reviewer context).
+#   reference_audio     list of local clip paths (clean, single-speaker) used
+#                       to BUILD the reference embedding for #5. Add samples,
+#                       re-run the embedder, done.
+#   embedding           path to the precomputed reference embedding (.npy).
+#                       Empty = not yet enrolled; speaker stays SPEAKER_NN.
+#
+# EXTENDING TO GUESTS
+#   Copy the [[member]] template at the bottom, set role="guest",
+#   status="guest", list `guest_episodes`, drop in a reference clip, re-embed.
+#   Nothing else in the pipeline needs to change.
+# ---------------------------------------------------------------------------
+
+[show]
+name = "The Skeptics' Guide to the Universe"
+short_name = "SGU"
+first_episode_date = "2005-05-04"
+society = "New England Skeptical Society (NESS)"
+# Fan project. Not affiliated with SGU Productions, LLC.
+
+# === Current cast ==========================================================
+
+[[member]]
+id = "steve"
+display_name = "Steve"
+full_name = "Steven Novella"
+role = "host"
+status = "current"
+active_from = "2005-05-04"
+aliases = ["Steven", "Steven Novella", "Dr. Novella", "Dr. Steven Novella"]
+bio = "Host and founder. Academic neurologist at Yale; president/co-founder of the NESS."
+reference_audio = []
+embedding = ""
+
+[[member]]
+id = "bob"
+display_name = "Bob"
+full_name = "Bob Novella"
+role = "rogue"
+status = "current"
+active_from = "2005-05-04"
+aliases = ["Robert Novella", "Bob"]
+bio = "Co-host. NESS co-founder/VP; covers astronomy, cosmology, and particle physics."
+reference_audio = []
+embedding = ""
+
+[[member]]
+id = "jay"
+display_name = "Jay"
+full_name = "Jay Novella"
+role = "rogue"
+status = "current"
+active_from = "2005-05-04"
+aliases = ["Jay"]
+bio = "Co-host. Producer of the live shows; co-founder of NECSS."
+reference_audio = []
+embedding = ""
+
+[[member]]
+id = "cara"
+display_name = "Cara"
+full_name = "Cara Santa Maria"
+role = "rogue"
+status = "current"
+active_from = "2015-07"
+active_from_episode = 521
+aliases = ["Cara Santa Maria", "Dr. Cara Santa Maria"]
+bio = "Co-host (joined July 2015). Emmy-winning science journalist and communicator."
+reference_audio = []
+embedding = ""
+
+# === Former cast ===========================================================
+
+[[member]]
+id = "evan"
+display_name = "Evan"
+full_name = "Evan Bernstein"
+role = "rogue"
+status = "former"
+active_from = "2005-05-04"
+active_to = "2026-06"
+active_to_episode = 1094   # approximate; per on-box handoff. Verify against wiki.
+aliases = ["Evan"]
+bio = "Co-host 2005–June 2026 (resigned). CT chapter chairman of the NESS."
+reference_audio = []
+embedding = ""
+
+[[member]]
+id = "perry"
+display_name = "Perry"
+full_name = "Perry DeAngelis"
+role = "rogue"
+status = "former"
+active_from = "2005-05-04"
+active_to = "2007"
+aliases = ["Perry"]
+bio = "Co-host and co-founder, 2005–2007. Died in 2007."
+reference_audio = []
+embedding = ""
+
+[[member]]
+id = "rebecca"
+display_name = "Rebecca"
+full_name = "Rebecca Watson"
+role = "rogue"
+status = "former"
+active_from = "2006"
+active_to = "2014"
+aliases = ["Rebecca", "Rebecca Watson"]
+bio = "Panelist 2006–2014. Founder of Skepchick."
+reference_audio = []
+embedding = ""
+
+# === Guests (extend here) ==================================================
+# Template — copy per guest, fill in, add a reference clip, re-embed:
+#
+# [[member]]
+# id = "george-hrab"
+# display_name = "George Hrab"
+# full_name = "George Hrab"
+# role = "guest"
+# status = "guest"
+# guest_episodes = [1096]
+# aliases = ["George", "Geo"]
+# bio = "Musician; frequent SGU guest and live-show performer."
+# reference_audio = ["voiceprints/george-hrab/ep1096_intro.wav"]
+# embedding = ""

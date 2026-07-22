@@ -34,9 +34,16 @@ whisper_beam_size = 5
 mlx_whisper_repo = "mlx-community/whisper-large-v3-mlx"
 
 # --- local diarization (pyannote.audio) ------------------------------------
-hf_token = ""                       # HuggingFace token to download gated pyannote models (free)
-diarization_pipeline = "pyannote/speaker-diarization-3.1"
-diarization_device = "cpu"          # "cpu" | "cuda"
+# hf_token: leave blank to use a cached `hf auth login` (~/.cache/huggingface/token);
+# or set TB_HF_TOKEN. Either way you must accept the gated pipeline's terms on HF.
+hf_token = ""
+# community-1 is the pyannote.audio 4.x-native pipeline (Sep 2025) and gives better
+# speaker-turn boundaries than 3.1. Under 4.x, loading "3.1" pulls community-1 parts
+# anyway, so we target it explicitly. All are free but gated (accept terms on HF).
+#   pyannote/speaker-diarization-community-1  (4.x, recommended)
+#   pyannote/speaker-diarization-3.1          (3.x-era; deprecated under 4.x)
+diarization_pipeline = "pyannote/speaker-diarization-community-1"
+diarization_device = "cpu"          # "cpu" | "cuda" | "mps" (override via TB_DIARIZATION_DEVICE)
 # Directory of reference speaker embeddings for local speaker identification.
 # Empty = skip naming; speakers stay as SPEAKER_00.. for human review.
 voiceprint_dir = ""
