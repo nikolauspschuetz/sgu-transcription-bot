@@ -134,6 +134,20 @@ def save_transcript(episode_number: int, transcript: list[dict]) -> int:
     return len(rows)
 
 
+def get_transcript_segments(episode_number: int) -> list[dict]:
+    """Load an episode's timestream segments in order (for LLM segmentation, etc.)."""
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT seq, start_s, end_s, speaker, text FROM transcript_segments "
+            "WHERE episode_number = %s ORDER BY seq",
+            (episode_number,),
+        )
+        return [
+            {"seq": r[0], "start": r[1], "end": r[2], "speaker": r[3], "text": r[4]}
+            for r in cur.fetchall()
+        ]
+
+
 def search_transcript(query: str, episode_number: int | None = None, limit: int = 10) -> list[dict]:
     """Full-text search across the transcript timestream (ranked). Optionally scope to one episode."""
     sql = """

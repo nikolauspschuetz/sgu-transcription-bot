@@ -65,6 +65,11 @@ orchestration = [
     "dagster>=1.8",
     "dagster-webserver>=1.8",
 ]
+# Local LLM layer (Ollama) + tracing (Langfuse) for segmentation/enrichment (#6/#12).
+# Ollama is called via its OpenAI-compatible endpoint (the `openai` base dep).
+llm = [
+    "langfuse>=2",
+]
 
 [build-system]
 requires = ["hatchling"]
