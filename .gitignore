@@ -23,3 +23,7 @@ node_modules/
 
 # Generated transcript artifacts (VTT/MD/wiki) — output-first, not source
 /output/
+
+# Dagster local storage
+.tmp_dagster_home*/
+.dagster_home/
