@@ -15,8 +15,43 @@ on disk + the Postgres store hold the data). Heavy ASR/diarization still runs on
 native `uv` path — Dagster orchestrates the calls, it doesn't move compute into Docker.
 """
 
+import contextlib
+import os
+import sys
+
 import dagster as dg
 from dagster import AssetExecutionContext
+from loguru import logger as _loguru
+
+_LOGURU_TO_DAGSTER = {"WARNING": "warning", "ERROR": "error", "CRITICAL": "error", "DEBUG": "debug"}
+
+
+@contextlib.contextmanager
+def _dagster_logs(context: AssetExecutionContext):
+    """Route loguru into Dagster's structured logger and silence tqdm progress bars.
+
+    Inside an asset, our `logger.info/success/...` calls (and those in the interface
+    modules) become structured Dagster log events instead of raw captured stderr, and
+    DSPy's tqdm bar is disabled. Restores loguru's default stderr sink on exit.
+    """
+
+    def _sink(message):  # noqa: ANN001
+        record = message.record
+        getattr(context.log, _LOGURU_TO_DAGSTER.get(record["level"].name, "info"))(record["message"])
+
+    _loguru.remove()
+    handler_id = _loguru.add(_sink, level="INFO")
+    prev_tqdm = os.environ.get("TQDM_DISABLE")
+    os.environ["TQDM_DISABLE"] = "1"
+    try:
+        yield
+    finally:
+        _loguru.remove(handler_id)
+        _loguru.add(sys.stderr, level="INFO")
+        if prev_tqdm is None:
+            os.environ.pop("TQDM_DISABLE", None)
+        else:
+            os.environ["TQDM_DISABLE"] = prev_tqdm
 
 # Episodes 1..1097 (bump the upper bound as the show continues, or swap for a
 # DynamicPartitionsDefinition once episodes are discovered from the RSS feed).
@@ -43,14 +78,15 @@ def _rss_entry(episode_number: int):
 def diarized_transcript(context: AssetExecutionContext) -> list[dict]:
     from transcription_bot.handlers.transcription_handler import get_transcript  # noqa: PLC0415
 
-    episode = int(context.partition_key)
-    transcript = get_transcript(_rss_entry(episode))
-    if not transcript:
-        raise dg.Failure(description=f"No transcript produced for episode {episode}.")
-    context.add_output_metadata(
-        {"segments": len(transcript), "speakers": len({c["speaker"] for c in transcript})}
-    )
-    return list(transcript)
+    with _dagster_logs(context):
+        episode = int(context.partition_key)
+        transcript = get_transcript(_rss_entry(episode))
+        if not transcript:
+            raise dg.Failure(description=f"No transcript produced for episode {episode}.")
+        context.add_output_metadata(
+            {"segments": len(transcript), "speakers": len({c["speaker"] for c in transcript})}
+        )
+        return list(transcript)
 
 
 @dg.asset(
@@ -61,10 +97,11 @@ def diarized_transcript(context: AssetExecutionContext) -> list[dict]:
 def indexed_transcript(context: AssetExecutionContext, diarized_transcript: list[dict]) -> None:
     from transcription_bot.metadata import store  # noqa: PLC0415
 
-    episode = int(context.partition_key)
-    store.init_schema()
-    count = store.save_transcript(episode, diarized_transcript)
-    context.add_output_metadata({"segments_indexed": count})
+    with _dagster_logs(context):
+        episode = int(context.partition_key)
+        store.init_schema()
+        count = store.save_transcript(episode, diarized_transcript)
+        context.add_output_metadata({"segments_indexed": count})
 
 
 @dg.asset(
@@ -75,9 +112,10 @@ def indexed_transcript(context: AssetExecutionContext, diarized_transcript: list
 def episode_outputs(context: AssetExecutionContext, diarized_transcript: list[dict]) -> None:
     from transcription_bot.serializers.local_outputs import write_transcript_outputs  # noqa: PLC0415
 
-    episode = int(context.partition_key)
-    paths = write_transcript_outputs(diarized_transcript, _rss_entry(episode))
-    context.add_output_metadata({"outputs": [str(p) for p in paths]})
+    with _dagster_logs(context):
+        episode = int(context.partition_key)
+        paths = write_transcript_outputs(diarized_transcript, _rss_entry(episode))
+        context.add_output_metadata({"outputs": [str(p) for p in paths]})
 
 
 @dg.asset(
@@ -89,11 +127,12 @@ def episode_outputs(context: AssetExecutionContext, diarized_transcript: list[di
 def episode_segments(context: AssetExecutionContext) -> None:
     from transcription_bot.interfaces.local_llm import segment_episode  # noqa: PLC0415
 
-    episode = int(context.partition_key)
-    segments = segment_episode(episode, model="gemma4:12b")
-    context.add_output_metadata(
-        {"segments_found": len(segments), "sample": dg.MetadataValue.json(segments[:5])}
-    )
+    with _dagster_logs(context):
+        episode = int(context.partition_key)
+        segments = segment_episode(episode, model="gemma4:12b")
+        context.add_output_metadata(
+            {"segments_found": len(segments), "sample": dg.MetadataValue.json(segments[:5])}
+        )
 
 
 @dg.asset(
@@ -102,18 +141,18 @@ def episode_segments(context: AssetExecutionContext) -> None:
 )
 def compiled_segmenter(context: AssetExecutionContext) -> None:
     from transcription_bot.interfaces.dspy_segmenter import compile_segmenter  # noqa: PLC0415
-
-    # Bootstrap the trainset from whatever episodes are indexed in the timestream.
     from transcription_bot.metadata import store  # noqa: PLC0415
 
-    with store.connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT DISTINCT episode_number FROM transcript_segments ORDER BY 1")
-        episodes = [r[0] for r in cur.fetchall()]
-    if not episodes:
-        raise dg.Failure(description="No indexed episodes to bootstrap from; materialize indexed_transcript first.")
+    with _dagster_logs(context):
+        # Bootstrap the trainset from whatever episodes are indexed in the timestream.
+        with store.connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT episode_number FROM transcript_segments ORDER BY 1")
+            episodes = [r[0] for r in cur.fetchall()]
+        if not episodes:
+            raise dg.Failure(description="No indexed episodes; materialize indexed_transcript first.")
 
-    meta = compile_segmenter(episodes, model="gemma4:12b")
-    context.add_output_metadata({**meta, "bootstrap_episodes": episodes})
+        meta = compile_segmenter(episodes, model="gemma4:12b")
+        context.add_output_metadata({**meta, "bootstrap_episodes": episodes})
 
 
 defs = dg.Definitions(
