@@ -12,6 +12,7 @@ single-pass windowed segmenter — the agentic/ensemble refinement is #12.
 
 import contextlib
 import json
+import os
 
 from loguru import logger
 
@@ -38,11 +39,18 @@ _SEGMENT_SYSTEM = (
 
 
 def _client():  # noqa: ANN202
-    """OpenAI-compatible client pointed at Ollama; Langfuse-traced when configured."""
-    try:
-        from langfuse.openai import OpenAI  # noqa: PLC0415 - drop-in tracer
-    except Exception:  # noqa: BLE001 - Langfuse optional
+    """OpenAI-compatible client pointed at Ollama; Langfuse-traced unless disabled.
+
+    Set ``TB_DISABLE_LANGFUSE=1`` for batch/backfill runs — synchronous per-call tracing
+    makes segmenting a whole episode (dozens of windows) impractically slow.
+    """
+    if os.environ.get("TB_DISABLE_LANGFUSE"):
         from openai import OpenAI  # noqa: PLC0415
+    else:
+        try:
+            from langfuse.openai import OpenAI  # noqa: PLC0415 - drop-in tracer
+        except Exception:  # noqa: BLE001 - Langfuse optional
+            from openai import OpenAI  # noqa: PLC0415
 
     return OpenAI(base_url=config.ollama_base_url.rstrip("/") + "/v1", api_key="ollama")
 
@@ -163,7 +171,9 @@ def _windows(segments: list[dict], window_s: int) -> list[list[dict]]:
 
 
 def _langfuse_client():  # noqa: ANN202
-    """An authenticated Langfuse client, or None if tracing isn't configured/reachable."""
+    """An authenticated Langfuse client, or None if tracing is disabled/unconfigured."""
+    if os.environ.get("TB_DISABLE_LANGFUSE"):
+        return None
     try:
         from langfuse import get_client  # noqa: PLC0415
 
